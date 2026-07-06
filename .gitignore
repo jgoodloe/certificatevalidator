@@ -1,0 +1,8 @@
+# Server TLS material and CA bundles are deployment-specific — never commit.
+certs/*
+!certs/.gitkeep
+trust/anchors/*
+!trust/anchors/.gitkeep
+trust/intermediates/*
+!trust/intermediates/.gitkeep
+__pycache__/

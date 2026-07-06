@@ -1,0 +1,45 @@
+services:
+  # Mutual-TLS front-end. Owns the piv. and piv-any. subdomains, terminates
+  # client-cert TLS, and reverse-proxies the parsed cert to the app.
+  mtls-nginx:
+    image: nginx:1.27
+    restart: unless-stopped
+    ports:
+      - "443:443"          # or bind to an internal IP if NPM Streams fronts this
+    volumes:
+      - ./nginx/mtls.conf:/etc/nginx/conf.d/mtls.conf:ro
+      - ./certs:/etc/nginx/certs:ro   # server.crt, server.key, fpki-cas.pem
+    networks: [pivnet]
+    depends_on: [validator-app]
+
+  # Landing page with the four options.
+  landing:
+    image: nginx:1.27
+    restart: unless-stopped
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    networks: [pivnet]
+    # Front this one through your existing NPM as a normal proxy host
+    # (certtesting.goodloe.xyz -> landing:80). No client certs here.
+
+  # The Python validator. Not exposed publicly; only mtls-nginx reaches it.
+  validator-app:
+    build: ./app
+    restart: unless-stopped
+    environment:
+      TRUST_DIR: /trust/anchors
+      INTERMEDIATE_DIR: /trust/intermediates
+      REQUIRED_GROUP: piv-validator     # authentik group required to validate
+      GROUP_SEPARATOR: ","              # how authentik joins the groups header
+    volumes:
+      - ./trust:/trust:ro    # drop FPKI/NIST-test roots + intermediates here
+    networks: [pivnet]
+
+networks:
+  pivnet:
+    driver: bridge
+    # mtls-nginx reaches the authentik embedded outpost over this network.
+    # If your authentik stack is on a different compose project/network,
+    # attach mtls-nginx to that network too (external: true) so the
+    # http://authentik-outpost:9000 upstream resolves. Adjust the hostname
+    # in nginx/mtls.conf to match your outpost's service/container name.
