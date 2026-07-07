@@ -38,8 +38,20 @@ services:
 networks:
   pivnet:
     driver: bridge
-    # mtls-nginx reaches the authentik embedded outpost over this network.
-    # If your authentik stack is on a different compose project/network,
-    # attach mtls-nginx to that network too (external: true) so the
-    # http://authentik-outpost:9000 upstream resolves. Adjust the hostname
-    # in nginx/mtls.conf to match your outpost's service/container name.
+    # No manual setup needed: compose creates this network and all three
+    # services join it, which covers mtls-nginx -> validator-app.
+    #
+    # The one external dependency is authentik: mtls.conf's forward-auth
+    # calls http://authentik-outpost:9000, resolvable only if the outpost
+    # shares a network with mtls-nginx. If authentik is a separate compose
+    # project, attach mtls-nginx to its network and match the hostname in
+    # nginx/mtls.conf to the outpost's container/service name (find both
+    # with `docker network ls` / `docker ps`):
+    #
+    #   services:
+    #     mtls-nginx:
+    #       networks: [pivnet, authentik_net]
+    #   networks:
+    #     authentik_net:
+    #       external: true
+    #       name: authentik_default

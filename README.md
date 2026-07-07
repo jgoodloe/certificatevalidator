@@ -39,7 +39,9 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
      <http://repo.fpki.gov/bridge/fbcag4.crt> and
      <http://repo.fpki.gov/bridge/caCertsIssuedByfbcag4.p7c>
 
-   Build the bundle (the `.crt`/`.p7c` files are DER; nginx needs PEM):
+   Build the bundle (the `.crt`/`.p7c` files are DER; nginx needs PEM) — or
+   run `./scripts/fetch-fpki-certs.sh`, which does all of this **and** step 3's
+   production layout in one go (`--bridge` adds the Federal Bridge chain):
 
    ```sh
    curl -LO http://repo.fpki.gov/fcpca/fcpcag2.crt
