@@ -93,7 +93,7 @@ for the two `piv` hosts itself, so no separate TLS listener is needed.
 
    Request/attach a normal SSL cert for each in the NPM UI (Let's Encrypt
    DNS-01 via the Cloudflare provider works). In the two snippets, adjust the
-   `authentik-outpost` hostname to your authentik server container — NPM must
+   `authentik-server` hostname to your authentik server container — NPM must
    share a network with it for the forward-auth subrequest.
 5. **DNS.** All three hostnames point at the NPM host, as usual.
 

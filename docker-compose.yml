@@ -56,7 +56,8 @@ networks:
   #   name: npm_default
 
   # Standalone mode (Mode B) authentik note: mtls.conf's forward-auth calls
-  # http://authentik-outpost:9000, resolvable only if mtls-nginx shares a
-  # network with the outpost. If authentik is a separate compose project,
-  # attach mtls-nginx to its network the same way as proxynet above and
-  # match the hostname in nginx/mtls.conf to the outpost's container name.
+  # http://authentik-server:9000. The embedded outpost is NOT a separate
+  # container -- it listens on port 9000 INSIDE the authentik server
+  # container -- so that hostname must be your authentik server's Docker
+  # name, and mtls-nginx must share a network with it (attach it the same
+  # way as proxynet above). See docs/AUTHENTIK_SETUP.md section 2.
