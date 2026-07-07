@@ -28,14 +28,40 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
    are mTLS endpoints you may not want public HTTP-01 challenges on).
 
 2. **Federal CA bundle.** Put the FPKI Common Policy root + issuing CA certs as
-   a single PEM at `./certs/fpki-cas.pem`. Source: IDManagement.gov "FPKI
-   certificates and CRLs". Its subject DNs become the browser's filter list on
-   the `piv.` endpoint.
+   a single PEM at `./certs/fpki-cas.pem`. Its subject DNs become the browser's
+   filter list on the `piv.` endpoint. Sources (GSA FPKI repository, documented
+   at <https://www.idmanagement.gov/implement/trust-fcpca/>):
+
+   - Root (Federal Common Policy CA G2): <http://repo.fpki.gov/fcpca/fcpcag2.crt>
+   - CAs issued by the root (intermediates, PKCS#7):
+     <http://repo.fpki.gov/fcpca/caCertsIssuedByfcpcag2.p7c>
+   - Optional, for PIV-I / cross-certified partners — Federal Bridge CA G4:
+     <http://repo.fpki.gov/bridge/fbcag4.crt> and
+     <http://repo.fpki.gov/bridge/caCertsIssuedByfbcag4.p7c>
+
+   Build the bundle (the `.crt`/`.p7c` files are DER; nginx needs PEM):
+
+   ```sh
+   curl -LO http://repo.fpki.gov/fcpca/fcpcag2.crt
+   curl -LO http://repo.fpki.gov/fcpca/caCertsIssuedByfcpcag2.p7c
+   openssl x509  -inform DER -in fcpcag2.crt -out fcpcag2.pem
+   openssl pkcs7 -inform DER -in caCertsIssuedByfcpcag2.p7c \
+     -print_certs -out issuedByfcpcag2.pem
+   cat fcpcag2.pem issuedByfcpcag2.pem > certs/fpki-cas.pem
+   ```
 
 3. **Trust anchors for validation.** Drop root certs in `./trust/anchors/` and
-   intermediates in `./trust/intermediates/`. For production use the FPKI
-   Common Policy Root CA; for testing use the **NIST PIV test PKI** roots so you
-   can validate NIST test PIV cards without a live credential.
+   intermediates in `./trust/intermediates/` (the app accepts PEM or DER files
+   with any name, but not `.p7c` — convert those as above).
+
+   - **Production (real PIV/CAC):** `fcpcag2.pem` from step 2 goes in
+     `./trust/anchors/`; `issuedByfcpcag2.pem` goes in `./trust/intermediates/`.
+   - **Testing (NIST test PIV cards):** the **NIST PIV test PKI**, from the
+     project page <https://csrc.nist.gov/projects/piv/nist-piv-test-cards>.
+     Root trust anchor:
+     <https://csrc.nist.gov/CSRC/media/Projects/PIV/documents/Self-signedTrustAnchorCertificate.cer>
+     → `./trust/anchors/`; the intermediate-CA ZIP linked on the same page
+     → unpack into `./trust/intermediates/`.
 
 4. **DNS.** Point `piv.certtesting.goodloe.xyz` and
    `piv-any.certtesting.goodloe.xyz` at the host running `mtls-nginx`. Front the
@@ -46,6 +72,13 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
 
 ## Notes
 
+- **Networking:** the `pivnet` bridge network needs no setup — `docker compose
+  up` creates it and the three services join it automatically. The one case
+  needing action: nginx's forward-auth calls `http://authentik-outpost:9000`,
+  so if authentik runs in a *different* compose project, attach `mtls-nginx`
+  to that stack's network too (declare it `external: true` under `networks:`)
+  and make the upstream hostname in `nginx/mtls.conf` match the outpost's
+  container/service name (`docker network ls` / `docker ps` to find both).
 - **Do not** put the mTLS endpoints behind NPM as a normal HTTP proxy host —
   the client cert won't survive the hop. If you want a single public ingress,
   use NPM **Streams** (layer-4 SNI passthrough) to forward `piv.` / `piv-any.`
