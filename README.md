@@ -23,11 +23,15 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
 
 ## Deploy
 
-1. **Server TLS cert.** Put `server.crt` / `server.key` in `./certs/` for the
-   `piv.` and `piv-any.` subdomains (Let's Encrypt via DNS-01 works, since these
-   are mTLS endpoints you may not want public HTTP-01 challenges on).
+Two supported modes. **Mode A (recommended)** plugs into an existing Nginx
+Proxy Manager: NPM keeps port 443 and terminates the mTLS handshake itself via
+per-host custom nginx config, so there is no port conflict, no SNI router, and
+no extra IP. **Mode B (standalone)** runs the dedicated `mtls-nginx` container,
+which needs port 443 to itself.
 
-2. **Federal CA bundle.** Put the FPKI Common Policy root + issuing CA certs as
+### Common setup (both modes)
+
+1. **Federal CA bundle.** Put the FPKI Common Policy root + issuing CA certs as
    a single PEM at `./certs/fpki-cas.pem`. Its subject DNs become the browser's
    filter list on the `piv.` endpoint. Sources (GSA FPKI repository, documented
    at <https://www.idmanagement.gov/implement/trust-fcpca/>):
@@ -40,8 +44,9 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
      <http://repo.fpki.gov/bridge/caCertsIssuedByfbcag4.p7c>
 
    Build the bundle (the `.crt`/`.p7c` files are DER; nginx needs PEM) — or
-   run `./scripts/fetch-fpki-certs.sh`, which does all of this **and** step 3's
-   production layout in one go (`--bridge` adds the Federal Bridge chain):
+   run `./scripts/fetch-fpki-certs.sh`, which does all of this **and** step 2's
+   production trust-store layout in one go (`--bridge` adds the Federal Bridge
+   chain):
 
    ```sh
    curl -LO http://repo.fpki.gov/fcpca/fcpcag2.crt
@@ -52,7 +57,7 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
    cat fcpcag2.pem issuedByfcpcag2.pem > certs/fpki-cas.pem
    ```
 
-3. **Trust anchors for validation.** Drop root certs in `./trust/anchors/` and
+2. **Trust anchors for validation.** Drop root certs in `./trust/anchors/` and
    intermediates in `./trust/intermediates/` (the app accepts PEM or DER files
    with any name, but not `.p7c` — convert those as above).
 
@@ -65,26 +70,85 @@ The `piv` vs `piv-any` split is the **CA filter** in the TLS
      → `./trust/anchors/`; the intermediate-CA ZIP linked on the same page
      → unpack into `./trust/intermediates/`.
 
-4. **DNS.** Point `piv.certtesting.goodloe.xyz` and
-   `piv-any.certtesting.goodloe.xyz` at the host running `mtls-nginx`. Front the
-   `landing` container through your existing NPM as a normal proxy host at
-   `certtesting.goodloe.xyz`.
+### Mode A — behind Nginx Proxy Manager (recommended)
 
-5. `docker compose up -d --build`
+NPM stays on port 443 for everything; it performs the client-cert handshake
+for the two `piv` hosts itself, so no separate TLS listener is needed.
+
+1. `docker compose up -d --build` — starts `landing` + `validator-app` only
+   (`mtls-nginx` is behind a compose profile and does not run in this mode).
+2. **Networking.** Uncomment the `proxynet` network in `docker-compose.yml`
+   (and the extra `networks:` lines on `landing` / `validator-app`), set its
+   `name:` to NPM's Docker network, and `docker compose up -d` again so NPM
+   can reach both containers by name.
+3. **CA bundle into NPM.** Copy `certs/fpki-cas.pem` into NPM's data volume:
+   `cp certs/fpki-cas.pem <npm-data-dir>/custom_ssl/fpki-cas.pem` (the
+   snippets reference it as `/data/custom_ssl/fpki-cas.pem`).
+4. **Three NPM proxy hosts:**
+   | Host | Forward to | Advanced config |
+   |---|---|---|
+   | `certtesting.…` | `landing:80` | (none) |
+   | `piv.…` | `validator-app:8000` | paste `nginx/npm/piv.conf` |
+   | `piv-any.…` | `validator-app:8000` | paste `nginx/npm/piv-any.conf` |
+
+   Request/attach a normal SSL cert for each in the NPM UI (Let's Encrypt
+   DNS-01 via the Cloudflare provider works). In the two snippets, adjust the
+   `authentik-outpost` hostname to your authentik server container — NPM must
+   share a network with it for the forward-auth subrequest.
+5. **DNS.** All three hostnames point at the NPM host, as usual.
+
+### Mode B — standalone `mtls-nginx`
+
+For hosts where port 443 is free (no NPM, or a separate machine/IP).
+
+1. **Server TLS cert.** Put `server.crt` / `server.key` in `./certs/` covering
+   the `piv.` and `piv-any.` subdomains (Let's Encrypt DNS-01 works, since you
+   may not want public HTTP-01 challenges on mTLS endpoints).
+2. **DNS.** Point `piv.…` and `piv-any.…` at this host; front `landing`
+   through your reverse proxy at `certtesting.…` as a normal proxy host.
+3. `docker compose --profile standalone up -d --build`
+
+### Cloudflare (both modes)
+
+The `piv.` and `piv-any.` DNS records **must be DNS-only (grey cloud)**. A
+proxied (orange-cloud) record terminates TLS at Cloudflare's edge, which never
+requests a client certificate — the smartcard picker simply won't appear. The
+landing page and authentik hostnames can stay proxied. Grey-clouding exposes
+the origin IP on those two records; firewall accordingly.
+
+## Alternative designs considered
+
+- **NPM Streams / SNI router in front of `mtls-nginx`.** NPM streams are plain
+  port forwards, not SNI-aware, so sharing 443 needs a hand-rolled
+  `ssl_preread` stream router with NPM moved to an internal port — an extra
+  moving part Mode A makes unnecessary.
+- **Secondary IP or nonstandard port for `mtls-nginx`.** Works (it's Mode B),
+  but requires spare address space or ugly URLs.
+- **Cloudflare mTLS at the edge (API Shield).** Would allow keeping the
+  orange cloud: Cloudflare requests the client cert and forwards it in
+  `Cf-Client-Cert-Der-Base64`. Requires a paid/Enterprise plan for
+  bring-your-own-CA (the FPKI bundle), and the app would need to read
+  Cloudflare's header instead of `X-Client-Cert`. Viable future option.
+- **No-handshake validation (paste/upload a `.cer` file).** Works behind any
+  proxy including orange-cloud Cloudflare, since no TLS client cert is
+  involved — but there's no live smartcard picker, so it complements rather
+  than replaces the four options. Could be added as a fifth landing-page
+  option later.
 
 ## Notes
 
-- **Networking:** the `pivnet` bridge network needs no setup — `docker compose
-  up` creates it and the three services join it automatically. The one case
-  needing action: nginx's forward-auth calls `http://authentik-outpost:9000`,
-  so if authentik runs in a *different* compose project, attach `mtls-nginx`
-  to that stack's network too (declare it `external: true` under `networks:`)
-  and make the upstream hostname in `nginx/mtls.conf` match the outpost's
-  container/service name (`docker network ls` / `docker ps` to find both).
-- **Do not** put the mTLS endpoints behind NPM as a normal HTTP proxy host —
-  the client cert won't survive the hop. If you want a single public ingress,
-  use NPM **Streams** (layer-4 SNI passthrough) to forward `piv.` / `piv-any.`
-  raw to `mtls-nginx:443`.
+- **Where the handshake lives is where the trust boundary lives.** Nothing may
+  sit in front of the TLS listener that requests the client cert (NPM in
+  Mode A, `mtls-nginx` in Mode B) except raw L4 passthrough — an HTTP proxy
+  hop (including Cloudflare's orange cloud) strips the client cert. A plain
+  NPM proxy host *without* the `nginx/npm/*.conf` advanced config has the same
+  problem: it's the advanced config that makes NPM request the cert at its own
+  handshake.
+- **Header trust:** `validator-app` believes whatever `X-Client-*` /
+  `X-Authentik-*` headers it receives, so the mTLS-terminating proxy must be
+  the only thing that can reach it. `docker-compose.yml` doesn't publish its
+  port; keep it that way, and be deliberate about what else is attached to the
+  networks it joins.
 - `revocation_mode` is `hard-fail`: a cert whose OCSP/CRL can't be reached is
   treated as INVALID. Switch to `soft-fail` in `main.py` if you want the
   opposite for testing.

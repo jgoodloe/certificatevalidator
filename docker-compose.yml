@@ -1,28 +1,33 @@
 services:
-  # Mutual-TLS front-end. Owns the piv. and piv-any. subdomains, terminates
-  # client-cert TLS, and reverse-proxies the parsed cert to the app.
+  # OPTIONAL standalone mTLS front-end (Mode B). Only needed if you are NOT
+  # using the NPM-integrated mode: it owns the piv. / piv-any. handshake
+  # itself and therefore needs host port 443 (or an L4 SNI passthrough in
+  # front). Start it with:  docker compose --profile standalone up -d
   mtls-nginx:
     image: nginx:1.27
+    profiles: ["standalone"]
     restart: unless-stopped
     ports:
-      - "443:443"          # or bind to an internal IP if NPM Streams fronts this
+      - "443:443"          # conflicts with NPM on the same host -- Mode B only
     volumes:
       - ./nginx/mtls.conf:/etc/nginx/conf.d/mtls.conf:ro
       - ./certs:/etc/nginx/certs:ro   # server.crt, server.key, fpki-cas.pem
     networks: [pivnet]
     depends_on: [validator-app]
 
-  # Landing page with the four options.
+  # Landing page with the four options. In NPM-integrated mode, front this
+  # through NPM as a normal proxy host (certtesting.goodloe.xyz -> landing:80).
   landing:
     image: nginx:1.27
     restart: unless-stopped
     volumes:
       - ./web:/usr/share/nginx/html:ro
     networks: [pivnet]
-    # Front this one through your existing NPM as a normal proxy host
-    # (certtesting.goodloe.xyz -> landing:80). No client certs here.
+    # networks: [pivnet, proxynet]   # NPM-integrated mode: also join NPM's net
 
-  # The Python validator. Not exposed publicly; only mtls-nginx reaches it.
+  # The Python validator. Never exposed publicly; only the mTLS-terminating
+  # proxy (NPM proxy hosts, or mtls-nginx in standalone mode) may reach it,
+  # because it trusts the X-Client-* / X-Authentik-* headers it receives.
   validator-app:
     build: ./app
     restart: unless-stopped
@@ -34,24 +39,24 @@ services:
     volumes:
       - ./trust:/trust:ro    # drop FPKI/NIST-test roots + intermediates here
     networks: [pivnet]
+    # networks: [pivnet, proxynet]   # NPM-integrated mode: also join NPM's net
 
 networks:
   pivnet:
     driver: bridge
-    # No manual setup needed: compose creates this network and all three
-    # services join it, which covers mtls-nginx -> validator-app.
-    #
-    # The one external dependency is authentik: mtls.conf's forward-auth
-    # calls http://authentik-outpost:9000, resolvable only if the outpost
-    # shares a network with mtls-nginx. If authentik is a separate compose
-    # project, attach mtls-nginx to its network and match the hostname in
-    # nginx/mtls.conf to the outpost's container/service name (find both
-    # with `docker network ls` / `docker ps`):
-    #
-    #   services:
-    #     mtls-nginx:
-    #       networks: [pivnet, authentik_net]
-    #   networks:
-    #     authentik_net:
-    #       external: true
-    #       name: authentik_default
+    # Created automatically by compose; covers all container-to-container
+    # traffic inside this project. No manual setup needed.
+
+  # NPM-integrated mode (Mode A): uncomment this network AND the extra
+  # `networks:` lines on landing/validator-app above so NPM can reach them
+  # by container name. Set `name:` to NPM's actual network
+  # (`docker network ls` / `docker inspect <npm-container>`).
+  # proxynet:
+  #   external: true
+  #   name: npm_default
+
+  # Standalone mode (Mode B) authentik note: mtls.conf's forward-auth calls
+  # http://authentik-outpost:9000, resolvable only if mtls-nginx shares a
+  # network with the outpost. If authentik is a separate compose project,
+  # attach mtls-nginx to its network the same way as proxynet above and
+  # match the hostname in nginx/mtls.conf to the outpost's container name.
