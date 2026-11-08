@@ -140,6 +140,12 @@ jobs:
           } > alert-body.md
           ./scripts/alert.sh release-decision \
             "Release decision needed: $TAG has unfixed CVEs" alert-body.md
+          # The fixable-CVE blockage (if any) is resolved once the verdict
+          # is questionable; close stale release-blocked alerts.
+          for n in $(gh issue list --label release-blocked --state open \
+                       --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "No longer blocked: build $TAG has no fixable findings. The remaining decision is tracked in the release-decision issue."
+          done
 
       - name: Block release (fixable vulnerabilities present)
         if: steps.gate.outputs.verdict == 'fail'
