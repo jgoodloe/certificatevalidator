@@ -27,11 +27,12 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Approve and enable auto-merge (minor/patch only)
+      - name: Enable auto-merge (minor/patch only)
         if: steps.metadata.outputs.update-type != 'version-update:semver-major'
-        run: |
-          gh pr review --approve "$PR_URL"
-          gh pr merge --auto --squash "$PR_URL"
+        # No `gh pr review --approve` here: the ruleset requires the
+        # "validate" status check, not reviews, and repos block Actions
+        # from approving PRs by default anyway.
+        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
