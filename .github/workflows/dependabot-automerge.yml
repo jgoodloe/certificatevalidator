@@ -18,7 +18,9 @@ permissions:
 
 jobs:
   automerge:
-    if: github.actor == 'dependabot[bot]'
+    # Keyed off the PR author, not github.actor: a reopen or manual
+    # re-trigger by a human still processes Dependabot's PR.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Fetch update metadata
@@ -32,7 +34,13 @@ jobs:
         # No `gh pr review --approve` here: the ruleset requires the
         # "validate" status check, not reviews, and repos block Actions
         # from approving PRs by default anyway.
-        run: gh pr merge --auto --squash "$PR_URL"
+        #
+        # `--auto` errors if the PR is already in clean status (checks
+        # finished green before this ran); the fallback merges directly,
+        # which the ruleset only permits when "validate" has passed.
+        run: |
+          gh pr merge --auto --squash "$PR_URL" \
+            || gh pr merge --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
