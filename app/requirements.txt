@@ -1,4 +1,4 @@
 fastapi==0.162.*
 uvicorn[standard]==0.54.*
 cryptography==50.*
-pyhanko-certvalidator==0.26.*
+pyhanko-certvalidator==0.33.*
