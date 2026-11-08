@@ -30,7 +30,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable auto-merge (minor/patch only)
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        # Allow-list, not a block-list: fetch-metadata returns null for
+        # version specs it can't parse as semver (e.g. wildcard pins like
+        # ==43.*), and `!= semver-major` would fail OPEN on null — that
+        # once auto-merged a major. Unknown now fails CLOSED (PR stays
+        # open for review). requirements.txt uses exact pins so pip
+        # updates classify correctly.
+        if: >-
+          contains(fromJSON('["version-update:semver-minor","version-update:semver-patch"]'),
+                   steps.metadata.outputs.update-type)
         # No `gh pr review --approve` here: the ruleset requires the
         # "validate" status check, not reviews, and repos block Actions
         # from approving PRs by default anyway.
