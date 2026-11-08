@@ -35,7 +35,7 @@ jobs:
           pip-audit -r app/requirements.txt -f json -o pip-audit.json || true
 
       - name: Trivy scan (image + OS package CVEs)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (SHA-pinned: tags were force-pushed in the 2026-03 supply-chain incident)
         with:
           image-ref: validator-app
           format: json
