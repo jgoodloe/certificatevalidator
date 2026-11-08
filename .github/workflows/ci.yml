@@ -24,3 +24,31 @@ jobs:
 
       - name: Smoke-test the app imports
         run: docker run --rm validator-app python -c "import main; print('validator-app imports OK')"
+
+      # --- CVE gate: a PR introducing fixable HIGH/CRITICAL vulns fails CI,
+      # so it can neither auto-merge nor be released. Findings with no
+      # released fix don't block PRs (nothing to update to); the release
+      # pipeline escalates those to the owner instead.
+      - name: pip-audit (Python dependency CVEs)
+        run: |
+          python3 -m pip install -q pip-audit
+          pip-audit -r app/requirements.txt -f json -o pip-audit.json || true
+
+      - name: Trivy scan (image + OS package CVEs)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: validator-app
+          format: json
+          output: trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Security gate
+        id: gate
+        run: ./scripts/security-gate.sh pip-audit.json trivy.json
+
+      - name: Fail on fixable vulnerabilities
+        if: steps.gate.outputs.verdict == 'fail'
+        run: |
+          echo "::error::Fixable HIGH/CRITICAL vulnerabilities — see security gate summary."
+          exit 1

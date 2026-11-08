@@ -1,0 +1,159 @@
+# Gated release pipeline.
+#
+# Triggered by: merges to the default branch that touch the app, a manual
+# dispatch, or cve-watch.yml when a fix becomes available for a vulnerability
+# in the released image.
+#
+# Nothing is released unless EVERYTHING passes:
+#   build (with --pull, so patched base images are picked up)
+#   -> container smoke test (real HTTP check against /healthz)
+#   -> CVE scan (pip-audit + Trivy, HIGH/CRITICAL)
+#
+# Outcomes:
+#   pass         -> image pushed to GHCR (:vTAG and :latest) + release published
+#   questionable -> vulnerabilities with NO released fix: image pushed (:vTAG
+#                   only), DRAFT release created, issue alerts the owner, who
+#                   decides; publishing the draft promotes it (see
+#                   release-published.yml)
+#   fail         -> fixable CVEs present or any step broke: NO release, issue
+#                   alerts the owner
+name: release
+
+on:
+  push:
+    branches: [main, master, claude/project-build-bqm2qy]
+    paths:
+      - "app/**"
+      - ".github/workflows/release.yml"
+      - "scripts/security-gate.sh"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why this build was requested
+        required: false
+        default: manual run
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/validator-app
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+  GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version tag
+        id: ver
+        run: echo "tag=v$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (--pull picks up patched base images)
+        run: docker build --pull -t "$IMAGE:${{ steps.ver.outputs.tag }}" ./app
+
+      - name: Smoke test the running container
+        run: |
+          docker run -d --name candidate -p 8000:8000 "$IMAGE:${{ steps.ver.outputs.tag }}"
+          if ! curl -fsS --retry 10 --retry-delay 2 --retry-all-errors \
+               http://localhost:8000/healthz; then
+            echo "::error::smoke test failed; container logs follow"
+            docker logs candidate
+            exit 1
+          fi
+          docker rm -f candidate
+
+      - name: pip-audit (Python dependency CVEs)
+        run: |
+          python3 -m pip install -q pip-audit
+          pip-audit -r app/requirements.txt -f json -o pip-audit.json || true
+
+      - name: Trivy scan (image + OS package CVEs)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.ver.outputs.tag }}
+          format: json
+          output: trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Security gate
+        id: gate
+        run: ./scripts/security-gate.sh pip-audit.json trivy.json
+
+      - name: Publish release (gate passed)
+        if: steps.gate.outputs.verdict == 'pass'
+        run: |
+          TAG='${{ steps.ver.outputs.tag }}'
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          docker tag "$IMAGE:$TAG" "$IMAGE:latest"
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+          {
+            echo "Image: \`$IMAGE:$TAG\` (also \`:latest\`)"
+            echo "Commit: ${{ github.sha }}"
+            echo "Trigger: ${{ github.event_name }} ${{ inputs.reason || '' }}"
+            echo
+            cat security-summary.md
+          } > release-notes.md
+          gh release create "$TAG" --title "$TAG" --notes-file release-notes.md
+
+      - name: Draft release + ask the owner (no fix released for findings)
+        if: steps.gate.outputs.verdict == 'questionable'
+        run: |
+          TAG='${{ steps.ver.outputs.tag }}'
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          docker push "$IMAGE:$TAG"   # versioned image only; :latest untouched
+          {
+            echo "Image: \`$IMAGE:$TAG\` (NOT tagged latest)"
+            echo "Commit: ${{ github.sha }}"
+            echo
+            cat security-summary.md
+          } > release-notes.md
+          gh release create "$TAG" --title "$TAG" --draft --notes-file release-notes.md
+          {
+            echo "Build \`$TAG\` passed build + smoke tests, but the CVE scan found"
+            echo "HIGH/CRITICAL vulnerabilities that have **no released fix** —"
+            echo "there is nothing to update to, so this is your call."
+            echo
+            echo "**To ship it:** publish the draft release \`$TAG\` on the Releases"
+            echo "page; \`:latest\` is then retagged automatically."
+            echo "**To hold:** leave (or delete) the draft. A later build re-scans."
+            echo
+            cat security-summary.md
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > alert-body.md
+          ./scripts/alert.sh release-decision \
+            "Release decision needed: $TAG has unfixed CVEs" alert-body.md
+
+      - name: Block release (fixable vulnerabilities present)
+        if: steps.gate.outputs.verdict == 'fail'
+        run: |
+          echo "::error::Fixable HIGH/CRITICAL vulnerabilities present — not releasing."
+          exit 1
+
+      - name: Alert the owner (release blocked)
+        if: failure()
+        run: |
+          {
+            echo "Release run for commit ${{ github.sha }} **did not produce a release**."
+            echo
+            echo "Either the build/smoke test broke, or fixable HIGH/CRITICAL"
+            echo "vulnerabilities are present (merge the corresponding Dependabot"
+            echo "PR, or wait for one — a rebuild will run automatically)."
+            echo
+            [ -f security-summary.md ] && cat security-summary.md
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > alert-body.md
+          ./scripts/alert.sh release-blocked "Release blocked: $(date -u +%Y-%m-%d) build did not pass" alert-body.md

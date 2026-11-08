@@ -1,0 +1,30 @@
+# When a release is published — including when the owner publishes a DRAFT
+# created by the questionable path of release.yml — promote that version's
+# image to :latest so deploys pick it up. Idempotent for releases that were
+# published automatically (their image is already :latest).
+name: release-published
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/validator-app
+
+jobs:
+  retag-latest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retag released image as latest
+        run: |
+          TAG='${{ github.event.release.tag_name }}'
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          if ! docker pull "$IMAGE:$TAG"; then
+            echo "::error::No image $IMAGE:$TAG found for this release — was it created outside release.yml?"
+            exit 1
+          fi
+          docker tag "$IMAGE:$TAG" "$IMAGE:latest"
+          docker push "$IMAGE:latest"

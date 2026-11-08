@@ -178,6 +178,49 @@ cd /path/to/certificatevalidator \
 (Or run [Watchtower](https://containrrr.dev/watchtower/) if you prefer
 image-based redeploys.)
 
+## Builds, security gates & releases
+
+Nothing becomes a release unless everything passes. The pipeline
+(`.github/workflows/release.yml`) runs on every default-branch change to
+`app/**`, on manual dispatch, and whenever `cve-watch` finds a fixable
+vulnerability in the deployed image:
+
+```
+build (--pull: patched base image)
+  -> smoke test (container really serves /healthz)
+  -> CVE scan (pip-audit + Trivy, HIGH/CRITICAL)
+  -> verdict:
+     pass          -> push ghcr image :vTAG + :latest, publish release
+     questionable  -> vulns with NO released fix: push :vTAG only, create a
+                      DRAFT release, open an issue assigned to you — YOU
+                      decide; publishing the draft retags :latest
+     fail          -> fixable CVEs or broken build: NO release, issue alert
+```
+
+- **PRs are gated too**: `ci.yml` runs the same CVE gate, so an update that
+  introduces a fixable HIGH/CRITICAL vulnerability can't even merge.
+- **Rebuild-on-patch**: `cve-watch.yml` scans the *released* image daily.
+  When a fix becomes available for a HIGH/CRITICAL finding, it triggers a
+  rebuild automatically (patched OS packages come from `--pull`; patched
+  Python libraries arrive as Dependabot PRs that auto-merge and trigger
+  their own release). You stop being vulnerable without touching anything.
+- **Alerts** are GitHub issues assigned to you, labeled `release-blocked`,
+  `release-decision`, or `security-rebuild` (deduplicated — repeated runs
+  comment on the open issue instead of spamming new ones).
+
+**One-time setup:** *Settings → Advanced Security*: enable **Dependency
+graph** and **Dependabot security updates** — that's what turns "a patched
+library exists" into an immediate PR instead of waiting for the weekly
+schedule. Optionally make the GHCR package public (Packages → package →
+settings), or `docker login ghcr.io` on the host with a `read:packages` PAT.
+
+**Deploying a release** on the host (instead of building locally):
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.release.yml pull validator-app
+docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
+```
+
 ## Notes
 
 - **Where the handshake lives is where the trust boundary lives.** Nothing may

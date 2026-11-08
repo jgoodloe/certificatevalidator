@@ -1,0 +1,12 @@
+# Deploy from gated releases instead of building locally:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.release.yml pull validator-app
+#   docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
+#
+# :latest only ever points at an image that passed the full release gate
+# (build + smoke test + CVE scan), or at a draft the owner explicitly
+# published. Don't pass --build with this override, or compose rebuilds
+# locally and bypasses the gate.
+services:
+  validator-app:
+    image: ghcr.io/jgoodloe/certificatevalidator/validator-app:latest
