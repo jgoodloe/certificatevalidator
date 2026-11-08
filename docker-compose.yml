@@ -4,7 +4,7 @@ services:
   # itself and therefore needs host port 443 (or an L4 SNI passthrough in
   # front). Start it with:  docker compose --profile standalone up -d
   mtls-nginx:
-    image: nginx:1.27
+    image: nginx:1.29
     profiles: ["standalone"]
     restart: unless-stopped
     ports:
@@ -18,7 +18,7 @@ services:
   # Landing page with the four options. In NPM-integrated mode, front this
   # through NPM as a normal proxy host (certtesting.goodloe.xyz -> landing:80).
   landing:
-    image: nginx:1.27
+    image: nginx:1.29
     restart: unless-stopped
     volumes:
       - ./web:/usr/share/nginx/html:ro
