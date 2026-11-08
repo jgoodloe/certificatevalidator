@@ -2,11 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir \
-      fastapi==0.115.* \
-      "uvicorn[standard]==0.32.*" \
-      cryptography==43.* \
-      pyhanko-certvalidator==0.26.*
+# Pinned in requirements.txt so Dependabot can propose updates.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 

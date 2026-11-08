@@ -1,0 +1,36 @@
+# Automated dependency updates. Active once this file is on the repo's
+# default branch. Safe (non-major) bumps are auto-merged by
+# .github/workflows/dependabot-automerge.yml after CI passes.
+version: 2
+updates:
+  # nginx / python base images in docker-compose.yml
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+
+  # python:3.12-slim base image in app/Dockerfile
+  - package-ecosystem: docker
+    directory: /app
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+
+  # Python packages in app/requirements.txt
+  - package-ecosystem: pip
+    directory: /app
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      python-deps:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  # Action pins in .github/workflows/
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies]

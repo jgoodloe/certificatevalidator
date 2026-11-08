@@ -135,6 +135,49 @@ the origin IP on those two records; firewall accordingly.
   than replaces the four options. Could be added as a fifth landing-page
   option later.
 
+## Automated updates
+
+Once these files are on the repo's **default branch**, GitHub keeps the
+project updated with no routine intervention:
+
+- **Dependabot** (`.github/dependabot.yml`) opens weekly PRs for the
+  `nginx`/`python` images in `docker-compose.yml` and `app/Dockerfile`, the
+  Python packages in `app/requirements.txt` (grouped), and the pinned
+  workflow actions.
+- **CI** (`.github/workflows/ci.yml`, check name `validate`) validates both
+  compose modes, builds the app image, and smoke-tests it on every PR.
+- **Auto-merge** (`.github/workflows/dependabot-automerge.yml`) approves and
+  auto-merges Dependabot PRs once `validate` is green — **minor/patch only**;
+  major bumps stay open for review.
+- **FPKI watchdog** (`.github/workflows/fpki-source-check.yml`) re-runs the
+  fetch script against GSA monthly. If GSA moves/breaks the files the run
+  fails (GitHub emails you); its job summary logs the bundle hash, so the
+  run history shows when the Federal PKI publishes changes.
+
+**One-time GitHub setup (two switches):**
+
+1. *Settings → General → Pull Requests* → enable **Allow auto-merge**.
+2. *Settings → Rules → Rulesets → New branch ruleset*: target the default
+   branch, add **Require status checks to pass** with the `validate` check,
+   and add **Repository admin** to the bypass list so your own direct pushes
+   are never blocked. Without this ruleset nothing breaks — auto-merge just
+   can't arm itself, and Dependabot PRs wait for a manual merge instead.
+
+**What GitHub can't do:** restart containers on your server. Pair it with a
+host-side cron, e.g. monthly:
+
+```sh
+cd /path/to/certificatevalidator \
+  && git pull \
+  && ./scripts/fetch-fpki-certs.sh \
+  && cp certs/fpki-cas.pem <npm-data-dir>/custom_ssl/fpki-cas.pem \
+  && docker compose up -d --build \
+  && docker exec <npm-container> nginx -s reload   # new CA bundle needs a reload
+```
+
+(Or run [Watchtower](https://containrrr.dev/watchtower/) if you prefer
+image-based redeploys.)
+
 ## Notes
 
 - **Where the handshake lives is where the trust boundary lives.** Nothing may

@@ -1,0 +1,37 @@
+# Auto-merge Dependabot PRs for non-major updates once CI is green.
+#
+# One-time repo setup this depends on (see README "Automated updates"):
+#   1. Settings > General > "Allow auto-merge" must be enabled.
+#   2. A ruleset/branch protection on the default branch requiring the
+#      "validate" status check — otherwise `gh pr merge --auto` has nothing
+#      to wait for and errors out (the PR then simply stays open for a
+#      manual merge; nothing unsafe happens).
+#
+# Major version bumps are left open for human review.
+name: dependabot-automerge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch update metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Approve and enable auto-merge (minor/patch only)
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

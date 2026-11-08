@@ -1,0 +1,26 @@
+# CI gate for auto-merged updates: if this passes, a Dependabot bump is
+# considered safe to land. Required-check name for rulesets: "validate".
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, master, claude/project-build-bqm2qy]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose files (both modes)
+        run: |
+          docker compose config -q
+          docker compose --profile standalone config -q
+
+      - name: Build validator-app image
+        run: docker build -t validator-app ./app
+
+      - name: Smoke-test the app imports
+        run: docker run --rm validator-app python -c "import main; print('validator-app imports OK')"
