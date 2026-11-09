@@ -207,6 +207,12 @@ build (--pull: patched base image)
 - **Alerts** are GitHub issues assigned to you, labeled `release-blocked`,
   `release-decision`, or `security-rebuild` (deduplicated — repeated runs
   comment on the open issue instead of spamming new ones).
+- **Stale-check self-heal**: `dependabot-retrigger.yml` runs daily and
+  re-triggers any open Dependabot PR whose `validate` check is red. For the
+  full fix (fresh merge ref picking up base-branch corrections), add a
+  `RETRIGGER_TOKEN` repo secret: a fine-grained PAT scoped to this repo with
+  *Pull requests* and *Contents* read/write. Without it the job re-runs the
+  failed run in place, which heals transient failures only.
 
 **One-time setup:** *Settings → Advanced Security*: enable **Dependency
 graph** and **Dependabot security updates** — that's what turns "a patched

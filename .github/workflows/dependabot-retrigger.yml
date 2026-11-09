@@ -1,0 +1,69 @@
+# Daily self-heal for Dependabot PRs stuck on a stale red check.
+#
+# A failed "validate" on a Dependabot PR does not re-run by itself when the
+# cause is later fixed on the base branch — the PR keeps its stale result
+# until something generates a new run. This job finds open Dependabot PRs
+# whose latest validate is "failure" and re-triggers them.
+#
+# Two tiers, because GitHub's recursion guard means events created with the
+# built-in GITHUB_TOKEN do not trigger workflows:
+#   - With a RETRIGGER_TOKEN secret (fine-grained PAT, this repo only,
+#     permissions: Pull requests read/write + Contents read/write): the PR
+#     is closed and reopened, generating a FRESH merge ref and workflow
+#     snapshot — heals every stale case, including workflow fixes that
+#     landed on the base branch after the PR's last run.
+#   - Without it: the failed ci run is re-run in place. That heals transient
+#     failures, but re-uses the original merge commit and workflow snapshot,
+#     so base-branch fixes are not picked up until Dependabot next rebases.
+name: dependabot-retrigger
+
+on:
+  schedule:
+    - cron: "23 7 * * *" # daily, minute jittered off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+env:
+  GH_TOKEN: ${{ secrets.RETRIGGER_TOKEN || secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+  HAVE_PAT: ${{ secrets.RETRIGGER_TOKEN != '' }}
+
+jobs:
+  retrigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-trigger stale failed checks on open Dependabot PRs
+        run: |
+          prs=$(gh pr list --author 'app/dependabot' --state open \
+                  --json number --jq '.[].number')
+          [ -n "$prs" ] || { echo "No open Dependabot PRs." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          for pr in $prs; do
+            sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+            latest=$(gh api "repos/$GH_REPO/commits/$sha/check-runs" \
+              --jq '[.check_runs[] | select(.name=="validate")] | sort_by(.started_at) | last | .conclusion // empty')
+            if [ "$latest" != "failure" ]; then
+              echo "PR #$pr: validate=$latest — nothing to do"
+              continue
+            fi
+            if [ "$HAVE_PAT" = "true" ]; then
+              echo "PR #$pr: stale failure — close/reopen for a fresh run"
+              gh pr close "$pr"
+              sleep 5
+              gh pr reopen "$pr"
+              echo "Re-triggered PR #$pr via close/reopen." >> "$GITHUB_STEP_SUMMARY"
+            else
+              run_id=$(gh api "repos/$GH_REPO/actions/runs?event=pull_request&head_sha=$sha" \
+                --jq '[.workflow_runs[] | select(.name=="ci")] | sort_by(.created_at) | last | .id // empty')
+              if [ -n "$run_id" ]; then
+                echo "PR #$pr: stale failure — re-running ci run $run_id (no RETRIGGER_TOKEN; same snapshot)"
+                gh run rerun "$run_id" --failed || true
+                echo "Re-ran failed ci for PR #$pr (add a RETRIGGER_TOKEN secret for full refresh)." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "PR #$pr: stale failure but no ci run found" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          done
