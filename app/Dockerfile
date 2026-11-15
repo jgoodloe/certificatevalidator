@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # Pull in Debian security patches that the base image hasn't shipped yet;
 # the release pipeline's CVE gate blocks on fixable OS CVEs otherwise.
